@@ -1,14 +1,27 @@
 import SwiftUI
 
 struct DynamicIslandView: View {
-    @State private var isExpanded: Bool = false
+    @ObservedObject var state: IslandState
+    @State private var isHovering: Bool = false
+    @State private var isPressed: Bool = false
     @StateObject private var spotify = SpotifyManager()
 
-    let activeWidth: CGFloat = 242
-    let activeHeight: CGFloat = 32
-    
-    let expandedWidth: CGFloat = 295
-    let expandedHeight: CGFloat = 145
+    private var isExpanded: Bool { state.isExpanded }
+
+    private let hoverScale: CGFloat = 1.06
+    private let pressedScale: CGFloat = 0.97
+
+    private var islandScale: CGFloat {
+        if isExpanded { return 1 }
+        if isPressed { return pressedScale }
+        return isHovering ? hoverScale : 1
+    }
+
+    let activeWidth = IslandLayout.compactSize.width
+    let activeHeight = IslandLayout.compactSize.height
+
+    let expandedWidth = IslandLayout.expandedSize.width
+    let expandedHeight = IslandLayout.expandedSize.height
     
     var currentWidth: CGFloat {
         return isExpanded ? expandedWidth : activeWidth
@@ -30,7 +43,7 @@ struct DynamicIslandView: View {
             RoundedRectangle(cornerRadius: isExpanded ? 28 : activeHeight / 2, style: .continuous)
                 .fill(Color.black)
                 .frame(width: currentWidth, height: currentHeight)
-                .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+                .shadow(color: .black.opacity(isExpanded ? 0.3 : 0), radius: 10, x: 0, y: 5)
             
             if isExpanded {
                 VStack(spacing: 12) {
@@ -157,12 +170,37 @@ struct DynamicIslandView: View {
                 .padding(.horizontal, 6)
                 .frame(width: activeWidth, height: activeHeight)
                 .transition(.opacity)
+
+                Color.clear
+                    .frame(width: activeWidth, height: activeHeight)
+                    .contentShape(RoundedRectangle(cornerRadius: activeHeight / 2, style: .continuous))
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active: NSCursor.pointingHand.set()
+                        case .ended: NSCursor.arrow.set()
+                        }
+                    }
+                    .onTapGesture { state.expand() }
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { _ in isPressed = true }
+                            .onEnded { _ in isPressed = false }
+                    )
             }
         }
+        .scaleEffect(islandScale, anchor: .top)
         .onHover { hovering in
-            isExpanded = hovering
+            if !isExpanded { isHovering = hovering }
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded {
+                isHovering = false
+                isPressed = false
+            }
         }
         .animation(.interactiveSpring(response: 0.4, dampingFraction: 0.65, blendDuration: 0.1), value: isExpanded)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHovering)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
 
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 0)

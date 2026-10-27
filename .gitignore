@@ -7,3 +7,6 @@ xcuserdata/
 DerivedData/
 build/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Claude Code
+CLAUDE.md

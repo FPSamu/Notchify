@@ -1,10 +1,24 @@
 import Cocoa
+import Combine
 import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var islandPanel: DynamicIslandPanel!
     var statusItem: NSStatusItem!
     var isIslandEnabled: Bool = true // Variable de estado
+
+    // El panel se ajusta al contenido para no bloquear los clics de las ventanas de abajo.
+    private let compactPanelSize = NSSize(width: 266, height: 38)
+    private let expandedPanelSize = NSSize(width: 340, height: 175)
+    private let islandState = IslandState()
+    private var isIslandExpanded = false
+    private var collapseWorkItem: DispatchWorkItem?
+    private var pointerTimer: Timer?
+    private var stateCancellable: AnyCancellable?
+
+    private var currentPanelSize: NSSize {
+        isIslandExpanded ? expandedPanelSize : compactPanelSize
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupPanel()
@@ -21,9 +35,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupPanel() {
-        let initialFrame = NSRect(x: 0, y: 0, width: 400, height: 120)
+        let initialFrame = NSRect(origin: .zero, size: compactPanelSize)
         islandPanel = DynamicIslandPanel(contentRect: initialFrame)
-        let hostingView = NSHostingView(rootView: DynamicIslandView())
+        let hostingView = FirstMouseHostingView(rootView: DynamicIslandView(state: islandState))
+        islandState.onWillExpand = { [weak self] in
+            self?.collapseWorkItem?.cancel()
+            self?.isIslandExpanded = true
+            self?.updateIslandVisibility()
+        }
+        stateCancellable = islandState.$isExpanded
+            .removeDuplicates()
+            .sink { [weak self] expanded in
+                self?.islandExpandedChanged(expanded)
+            }
+        hostingView.safeAreaRegions = []
+        hostingView.sizingOptions = []
         islandPanel.contentView = hostingView
         islandPanel.orderFront(nil)
     }
@@ -59,6 +85,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateIslandVisibility()
     }
     
+    private func islandExpandedChanged(_ expanded: Bool) {
+        collapseWorkItem?.cancel()
+
+        if expanded {
+            startPointerMonitoring()
+        } else {
+            stopPointerMonitoring()
+            // Esperamos a que termine la animación de colapso antes de reducir la ventana.
+            let work = DispatchWorkItem { [weak self] in
+                self?.isIslandExpanded = false
+                self?.updateIslandVisibility()
+            }
+            collapseWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        }
+    }
+
+    // El evento de hover de SwiftUI es poco fiable al cambiar el tamaño de la ventana,
+    // así que mientras está expandida se comprueba la posición real del ratón.
+    private func startPointerMonitoring() {
+        pointerTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.collapseIfPointerLeftIsland()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pointerTimer = timer
+    }
+
+    private func stopPointerMonitoring() {
+        pointerTimer?.invalidate()
+        pointerTimer = nil
+    }
+
+    private func collapseIfPointerLeftIsland() {
+        guard islandState.isExpanded, let panel = islandPanel else { return }
+
+        let size = IslandLayout.expandedSize
+        let margin: CGFloat = 6
+        let islandRect = NSRect(
+            x: panel.frame.midX - size.width / 2,
+            y: panel.frame.maxY - size.height,
+            width: size.width,
+            height: size.height
+        ).insetBy(dx: -margin, dy: -margin)
+
+        if !islandRect.contains(NSEvent.mouseLocation) {
+            islandState.isExpanded = false
+        }
+    }
+
     @objc func updateIslandVisibility() {
         guard isIslandEnabled else {
             islandPanel.animator().alphaValue = 0.0
@@ -67,8 +143,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         guard let screen = NSScreen.main else { return }
         
-        let panelWidth: CGFloat = 400
-        let panelHeight: CGFloat = 120
+        let panelWidth = currentPanelSize.width
+        let panelHeight = currentPanelSize.height
         let xPos = screen.frame.minX + (screen.frame.width - panelWidth) / 2
         
         // Detecta si la pantalla tiene notch (MacBook integrada vs Monitor externo)
